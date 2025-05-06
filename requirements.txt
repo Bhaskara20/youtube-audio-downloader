@@ -1,6 +1,2 @@
-# Tidak ada dependensi yang diperlukan untuk program ini 
 Flask>=2.0.0
-Flask-SocketIO>=5.0.0
-python-socketio>=5.0.0
 yt-dlp>=2023.12.30
-python-engineio==4.9.0 
