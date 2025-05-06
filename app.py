@@ -1,19 +1,11 @@
-from flask import Flask, render_template, request, send_from_directory, jsonify
-from flask_socketio import SocketIO, emit
+from flask import Flask, request, jsonify, send_from_directory
+from flask_socketio import SocketIO
 import yt_dlp
 import os
 import random
-import threading
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
-DOWNLOAD_FOLDER = os.path.join(os.getcwd(), 'downloads')
-AUDIO_FOLDER = os.path.join(os.getcwd(), 'audio_downloads')
-
-# Membuat folder jika belum ada
-for folder in [DOWNLOAD_FOLDER, AUDIO_FOLDER]:
-    if not os.path.exists(folder):
-        os.makedirs(folder)
 
 def get_random_user_agent():
     user_agents = [
@@ -24,48 +16,54 @@ def get_random_user_agent():
     ]
     return random.choice(user_agents)
 
-def download_video(url, sid):
-    ydl_opts = {
-        'format': 'best[ext=mp4]/best',
-        'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
-        'progress_hooks': [lambda d: yt_progress_hook(d, sid)],
-        'quiet': True,
-        'no_warnings': True,
-        'http_headers': {
-            'User-Agent': get_random_user_agent(),
-        },
-        'merge_output_format': 'mp4',
-    }
-    filename = None
+def download_audio(url, output_path=None):
     try:
+        if output_path is None:
+            output_path = os.path.join(os.getcwd(), "audio_downloads")
+        
+        if not os.path.exists(output_path):
+            os.makedirs(output_path)
+        
+        ydl_opts = {
+            'format': 'bestaudio[ext=m4a]/bestaudio/best',
+            'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+            'progress_hooks': [lambda d: print_progress(d)],
+            'quiet': False,
+            'no_warnings': False,
+            'http_headers': {
+                'User-Agent': get_random_user_agent(),
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+            },
+            'socket_timeout': 30,
+            'retries': 10,
+            'fragment_retries': 10,
+            'extractor_retries': 10,
+            'ignoreerrors': False,
+            'no_check_certificate': True,
+            'geo_bypass': True,
+            'geo_verification_proxy': None,
+            'nocheckcertificate': True,
+            'prefer_insecure': True,
+            'verbose': True,
+        }
+        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-        socketio.emit('download_complete', {'filename': os.path.basename(filename), 'type': 'video'}, room=sid)
+            info = ydl.extract_info(url, download=False)
+            if not info:
+                raise Exception("Tidak dapat mendapatkan informasi audio")
+            
+            ydl.download([url])
+            return True, "Audio berhasil diunduh"
+            
     except Exception as e:
-        socketio.emit('download_error', {'error': str(e)}, room=sid)
+        return False, str(e)
 
-def download_audio(url, sid):
-    ydl_opts = {
-        'format': 'bestaudio[ext=m4a]/bestaudio/best',
-        'outtmpl': os.path.join(AUDIO_FOLDER, '%(title)s.%(ext)s'),
-        'progress_hooks': [lambda d: yt_progress_hook(d, sid)],
-        'quiet': True,
-        'no_warnings': True,
-        'http_headers': {
-            'User-Agent': get_random_user_agent(),
-        },
-    }
-    filename = None
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-        socketio.emit('download_complete', {'filename': os.path.basename(filename), 'type': 'audio'}, room=sid)
-    except Exception as e:
-        socketio.emit('download_error', {'error': str(e)}, room=sid)
-
-def yt_progress_hook(d, sid):
+def print_progress(d):
     if d['status'] == 'downloading':
         if 'total_bytes' in d:
             percent = d['downloaded_bytes'] / d['total_bytes'] * 100
@@ -73,38 +71,23 @@ def yt_progress_hook(d, sid):
             percent = d['downloaded_bytes'] / d['total_bytes_estimate'] * 100
         else:
             percent = 0
-        socketio.emit('progress', {'percent': percent}, room=sid)
-    elif d['status'] == 'finished':
-        socketio.emit('progress', {'percent': 100}, room=sid)
+        socketio.emit('progress', {'percent': percent})
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return send_from_directory('.', 'index.html')
 
 @app.route('/download', methods=['POST'])
 def download():
-    url = request.form.get('url')
-    sid = request.form.get('sid')
-    download_type = request.form.get('type', 'video')
+    data = request.get_json()
+    url = data.get('url')
     
-    if not url or not sid:
-        return jsonify({'error': 'URL atau SID tidak ditemukan'}), 400
+    if not url:
+        return jsonify({'success': False, 'error': 'URL tidak ditemukan'})
     
-    if download_type == 'audio':
-        threading.Thread(target=download_audio, args=(url, sid), daemon=True).start()
-    else:
-        threading.Thread(target=download_video, args=(url, sid), daemon=True).start()
-    
-    return jsonify({'status': 'started'})
+    success, message = download_audio(url)
+    return jsonify({'success': success, 'error': message if not success else None})
 
-@app.route('/downloads/<filename>')
-def serve_video(filename):
-    return send_from_directory(DOWNLOAD_FOLDER, filename, as_attachment=True)
-
-@app.route('/audio/<filename>')
-def serve_audio(filename):
-    return send_from_directory(AUDIO_FOLDER, filename, as_attachment=True)
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    socketio.run(app, host='0.0.0.0', port=port, debug=False) 
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    socketio.run(app, host='0.0.0.0', port=port) 
