@@ -1,0 +1,6 @@
+# Tidak ada dependensi yang diperlukan untuk program ini 
+Flask==3.0.2
+Flask-SocketIO==5.3.6
+python-socketio==5.11.1
+yt-dlp>=2023.12.30
+python-engineio==4.9.0 
