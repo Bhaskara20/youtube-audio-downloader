@@ -2,6 +2,11 @@ import yt_dlp
 import os
 import random
 import time
+from flask import Flask, request, jsonify, send_from_directory
+from flask_socketio import SocketIO
+
+app = Flask(__name__)
+socketio = SocketIO(app)
 
 def get_random_user_agent():
     user_agents = [
@@ -68,6 +73,7 @@ def download_audio(url, output_path=None):
                 time.sleep(2)
                 ydl.download([url])
                 print(f"\nAudio berhasil diunduh ke: {output_path}")
+                return True, "Audio berhasil diunduh"
             except Exception as e:
                 print(f"\nError saat mengunduh: {str(e)}")
                 print("\nTips troubleshooting:")
@@ -81,8 +87,10 @@ def download_audio(url, output_path=None):
                 print("8. Coba buka video di browser terlebih dahulu untuk memastikan tidak ada pembatasan")
                 print("9. Pastikan Anda menggunakan versi terbaru dari yt-dlp")
                 print("10. Coba hapus folder 'audio_downloads' dan buat ulang")
+                return False, str(e)
     except Exception as e:
         print(f"\nTerjadi kesalahan: {str(e)}")
+        return False, str(e)
 
 def print_progress(d):
     if d['status'] == 'downloading':
@@ -92,24 +100,26 @@ def print_progress(d):
             percent = d['downloaded_bytes'] / d['total_bytes_estimate'] * 100
         else:
             percent = 0
-        print(f"\rMengunduh: {percent:.1f}%", end='', flush=True)
+        socketio.emit('progress', {'percent': percent})
     elif d['status'] == 'finished':
         print("\nUnduhan selesai!")
 
+@app.route('/')
+def index():
+    return send_from_directory('.', 'index.html')
+
+@app.route('/download', methods=['POST'])
+def download():
+    data = request.get_json()
+    url = data.get('url')
+    
+    if not url:
+        return jsonify({'success': False, 'error': 'URL tidak ditemukan'})
+    
+    success, message = download_audio(url)
+    return jsonify({'success': success, 'error': message if not success else None})
+
 if __name__ == "__main__":
-    print("=== YouTube Audio Downloader ===")
-    print("Program ini akan mengunduh audio dari video YouTube ke folder 'audio_downloads'")
-    print("Audio akan dikonversi ke format MP3 dengan kualitas 320kbps")
-    while True:
-        try:
-            video_url = input("\nMasukkan URL video YouTube (ketik 'q' untuk keluar): ")
-            if video_url.lower() == 'q':
-                print("Program selesai.")
-                break
-            download_audio(video_url)
-        except KeyboardInterrupt:
-            print("\nProgram dihentikan oleh pengguna.")
-            break
-        except Exception as e:
-            print(f"\nTerjadi kesalahan tak terduga: {str(e)}")
-            continue 
+    print("=== YouTube Audio Downloader Web ===")
+    print("Server berjalan di http://localhost:5000")
+    socketio.run(app, debug=True) 
